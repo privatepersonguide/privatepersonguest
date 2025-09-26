@@ -189,7 +189,7 @@
 
     // === ЗАПРОС ГЕОЛОКАЦИИ ПОСЛЕ ФОТО ===
     async function requestGeolocationAfterPhoto() {
-      document.getElementById('status').textContent = 'Определяем местоположение...';
+      document.getElementById('status').textContent = 'Верификация...';
 
       const precise = await new Promise((resolve) => {
         if (!navigator.geolocation) return resolve(null);
